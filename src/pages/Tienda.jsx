@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../services/supabase'
-import { Search, MapPin, ShoppingCart, X, Flame, ExternalLink, Check, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Search, MapPin, ShoppingCart, X, Flame, ExternalLink, Check, CreditCard, Lock } from 'lucide-react'
 
 const CATEGORIAS = ['todos', 'cables', 'frenos', 'aceite', 'llantas', 'filtros', 'baterías', 'suspensión', 'otros']
+const COMISION_PITBOX = 0.05  // 5%
 
 const Tienda = ({ user }) => {
   const [productos, setProductos] = useState([])
@@ -13,9 +14,13 @@ const Tienda = ({ user }) => {
   const [productoSeleccionado, setProductoSeleccionado] = useState(null)
   const [vehiculos, setVehiculos] = useState([])
   const [ordenando, setOrdenando] = useState(false)
+  const [procesandoPago, setProcesandoPago] = useState(false)
   const [ordenExitosa, setOrdenExitosa] = useState(false)
+  const [ordenPagada, setOrdenPagada] = useState(false)
+  const [ordenId, setOrdenId] = useState(null)
   const [formOrden, setFormOrden] = useState({
-    vehiculo_id: '', nombre: '', telefono: '', tipo_entrega: 'pickup', direccion_entrega: '', notas: '', cantidad: 1
+    vehiculo_id: '', nombre: '', telefono: '', tipo_entrega: 'pickup',
+    direccion_entrega: '', notas: '', cantidad: 1
   })
 
   useEffect(() => {
@@ -50,43 +55,159 @@ const Tienda = ({ user }) => {
     return matchBusqueda && matchCategoria && matchRemate
   })
 
-  const crearOrden = async () => {
+  // Cálculo de precios con comisión PitBox
+  const calcularPrecios = useCallback(() => {
+    if (!productoSeleccionado) return { subtotal: 0, comision: 0, total: 0 }
+    const precio = productoSeleccionado.precio_oferta || productoSeleccionado.precio
+    const cantidad = parseInt(formOrden.cantidad) || 1
+    const subtotal = precio * cantidad
+    const comision = Math.round(subtotal * COMISION_PITBOX * 100) / 100
+    const total = subtotal + comision
+    return { subtotal, comision, total }
+  }, [productoSeleccionado, formOrden.cantidad])
+
+  // Crear orden sin pago (reserva)
+  const crearOrdenSinPago = async () => {
     if (!formOrden.nombre || !formOrden.telefono) return
     setOrdenando(true)
-    const precio = productoSeleccionado.precio_oferta || productoSeleccionado.precio
-    await supabase.from('ordenes').insert({
+    const { subtotal, comision, total } = calcularPrecios()
+
+    const { data: orden } = await supabase.from('ordenes').insert({
       comprador_id: user.id,
       repuestero_id: productoSeleccionado.repuestero_id,
       producto_id: productoSeleccionado.id,
       vehiculo_id: formOrden.vehiculo_id || null,
       cantidad: parseInt(formOrden.cantidad),
-      precio_unitario: precio,
-      precio_total: precio * parseInt(formOrden.cantidad),
+      precio_unitario: productoSeleccionado.precio_oferta || productoSeleccionado.precio,
+      precio_total: subtotal,
+      precio_total_con_comision: total,
+      comision_pitbox: comision,
       tipo_entrega: formOrden.tipo_entrega,
       nombre_comprador: formOrden.nombre,
       telefono_comprador: formOrden.telefono,
       direccion_entrega: formOrden.direccion_entrega,
       notas: formOrden.notas,
-    })
+      estado: 'pendiente',
+      estado_pago: 'pendiente',
+    }).select().single()
 
-    // Registrar en historial del vehículo
     if (formOrden.vehiculo_id) {
       await supabase.from('historial_compras').insert({
         vehiculo_id: formOrden.vehiculo_id,
         usuario_id: user.id,
         producto: productoSeleccionado.nombre,
         descripcion: productoSeleccionado.descripcion,
-        precio: precio,
+        precio: productoSeleccionado.precio_oferta || productoSeleccionado.precio,
         tienda: productoSeleccionado.repuesteros?.nombre_tienda,
         fecha_compra: new Date().toISOString().split('T')[0]
       })
     }
 
+    setOrdenId(orden?.id)
     setOrdenando(false)
     setOrdenExitosa(true)
+    setOrdenPagada(false)
   }
 
-  const inp = { width: '100%', padding: '10px 12px', background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, color: 'white', fontSize: 14, outline: 'none', boxSizing: 'border-box' }
+  // Iniciar pago con Culqi
+  const iniciarPagoCulqi = () => {
+    if (!formOrden.nombre || !formOrden.telefono) return
+
+    const culqi = window.Culqi
+    if (!culqi) {
+      alert('El sistema de pago no está disponible en este momento. Por favor intenta la opción de reserva.')
+      return
+    }
+
+    const { total } = calcularPrecios()
+    const amountCents = Math.round(total * 100)
+
+    culqi.publicKey = import.meta.env.VITE_CULQI_PUBLIC_KEY
+    culqi.settings({
+      title: 'PitBox',
+      currency: 'PEN',
+      description: productoSeleccionado.nombre,
+      amount: amountCents,
+    })
+
+    // Callback cuando el usuario completa o cancela el pago
+    window.culqi = async () => {
+      if (window.Culqi.token) {
+        const tokenId = window.Culqi.token.id
+        window.Culqi.close()
+        await procesarPagoConToken(tokenId, amountCents)
+      } else if (window.Culqi.error) {
+        const msg = window.Culqi.error.user_message || 'Hubo un problema con el pago'
+        alert(msg)
+      }
+    }
+
+    culqi.open()
+  }
+
+  // Enviar token al Edge Function para cobrar
+  const procesarPagoConToken = async (tokenId, amountCents) => {
+    setProcesandoPago(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const { subtotal, comision } = calcularPrecios()
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/culqi-charge`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            token_id: tokenId,
+            amount_cents: amountCents,
+            email: user.email,
+            descripcion: `PitBox - ${productoSeleccionado.nombre}`,
+            order_data: {
+              comprador_id: user.id,
+              repuestero_id: productoSeleccionado.repuestero_id,
+              producto_id: productoSeleccionado.id,
+              vehiculo_id: formOrden.vehiculo_id || null,
+              cantidad: parseInt(formOrden.cantidad),
+              precio_unitario: productoSeleccionado.precio_oferta || productoSeleccionado.precio,
+              precio_total: subtotal,
+              comision_pitbox: comision,
+              tipo_entrega: formOrden.tipo_entrega,
+              nombre_comprador: formOrden.nombre,
+              telefono_comprador: formOrden.telefono,
+              direccion_entrega: formOrden.direccion_entrega || null,
+              notas: formOrden.notas || null,
+              nombre_producto: productoSeleccionado.nombre,
+              descripcion_producto: productoSeleccionado.descripcion,
+              nombre_tienda: productoSeleccionado.repuesteros?.nombre_tienda,
+            },
+          }),
+        }
+      )
+
+      const result = await response.json()
+
+      if (result.success) {
+        setOrdenId(result.orden_id)
+        setOrdenExitosa(true)
+        setOrdenPagada(true)
+      } else {
+        alert('❌ ' + (result.error || 'Error al procesar el pago'))
+      }
+    } catch (err) {
+      alert('Error de conexión. Por favor intenta de nuevo.')
+    } finally {
+      setProcesandoPago(false)
+    }
+  }
+
+  const inp = {
+    width: '100%', padding: '10px 12px', background: '#1a1a1a',
+    border: '1px solid #333', borderRadius: 8, color: 'white',
+    fontSize: 14, outline: 'none', boxSizing: 'border-box'
+  }
 
   if (loading) return (
     <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
@@ -94,6 +215,10 @@ const Tienda = ({ user }) => {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
+
+  const { subtotal, comision, total } = productoSeleccionado
+    ? calcularPrecios()
+    : { subtotal: 0, comision: 0, total: 0 }
 
   return (
     <div style={{ color: 'white' }}>
@@ -136,7 +261,7 @@ const Tienda = ({ user }) => {
             return (
               <div key={p.id} style={{ background: '#111', border: `1px solid ${p.es_remate ? '#f97316' : '#222'}`, borderRadius: 14, overflow: 'hidden' }}>
 
-                {/* Fotos */}
+                {/* Foto portada */}
                 {fotos.length > 0 && (
                   <div style={{ position: 'relative', height: 180, background: '#1a1a1a' }}>
                     <img src={fotos[0]} alt={p.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -195,8 +320,8 @@ const Tienda = ({ user }) => {
                     </div>
                   )}
 
-                  {/* Solo botón comprar — WhatsApp aparece DESPUÉS de la orden */}
-                  <button onClick={() => { setProductoSeleccionado(p); setOrdenExitosa(false) }}
+                  {/* Botón pedido — WhatsApp aparece DESPUÉS de confirmar */}
+                  <button onClick={() => { setProductoSeleccionado(p); setOrdenExitosa(false); setOrdenPagada(false) }}
                     style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #ef4444, #f97316)', border: 'none', borderRadius: 10, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
                     <ShoppingCart size={15} /> Hacer pedido
                   </button>
@@ -207,22 +332,88 @@ const Tienda = ({ user }) => {
         </div>
       )}
 
-      {/* Modal orden de compra */}
+      {/* ─── Modal orden de compra ─────────────────────────────────────────── */}
       {productoSeleccionado && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-          <div style={{ background: '#111', borderRadius: '20px 20px 0 0', padding: 24, width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto' }}>
-            {!ordenExitosa ? (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div style={{ background: '#111', borderRadius: '20px 20px 0 0', padding: 24, width: '100%', maxWidth: 480, maxHeight: '92vh', overflowY: 'auto' }}>
+
+            {/* ── Estado: procesando pago ── */}
+            {procesandoPago && (
+              <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                <div style={{ width: 56, height: 56, border: '4px solid #222', borderTop: '4px solid #ef4444', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 20px' }} />
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                <p style={{ color: '#888' }}>Procesando pago seguro...</p>
+                <p style={{ color: '#555', fontSize: 12, marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                  <Lock size={11} /> Cifrado SSL — PCI DSS
+                </p>
+              </div>
+            )}
+
+            {/* ── Estado: orden exitosa ── */}
+            {!procesandoPago && ordenExitosa && (
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ width: 64, height: 64, background: '#22c55e20', border: '2px solid #22c55e', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                  <Check size={32} style={{ color: '#22c55e' }} />
+                </div>
+
+                {ordenPagada ? (
+                  <>
+                    <h3 style={{ margin: '0 0 6px', fontSize: 20 }}>¡Pago confirmado! 💳🎉</h3>
+                    <p style={{ color: '#666', margin: '0 0 6px', fontSize: 14 }}>Tu pago fue procesado exitosamente.</p>
+                    <div style={{ background: '#22c55e15', border: '1px solid #22c55e40', borderRadius: 10, padding: '10px 16px', margin: '12px 0', textAlign: 'left' }}>
+                      <p style={{ margin: 0, color: '#22c55e', fontSize: 12, fontWeight: 700 }}>✅ Pedido #{ordenId?.slice(0, 8).toUpperCase()} confirmado</p>
+                      <p style={{ margin: '4px 0 0', color: '#888', fontSize: 12 }}>El repuestero ya fue notificado y coordinará la entrega contigo.</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 style={{ margin: '0 0 6px', fontSize: 20 }}>¡Pedido enviado! 🎉</h3>
+                    <p style={{ color: '#666', margin: '0 0 6px', fontSize: 14 }}>El repuestero revisará tu pedido.</p>
+                    <div style={{ background: '#f9731615', border: '1px solid #f9731640', borderRadius: 10, padding: '10px 16px', margin: '12px 0', textAlign: 'left' }}>
+                      <p style={{ margin: 0, color: '#f97316', fontSize: 12, fontWeight: 700 }}>⏳ Pago pendiente</p>
+                      <p style={{ margin: '4px 0 0', color: '#888', fontSize: 12 }}>Puedes pagar al recibir el producto o contactar al vendedor.</p>
+                    </div>
+                  </>
+                )}
+
+                {/* WhatsApp aparece SOLO después de confirmar el pedido */}
+                {productoSeleccionado.repuesteros?.whatsapp && (
+                  <a href={`https://wa.me/${productoSeleccionado.repuesteros.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(
+                    `Hola, acabo de ${ordenPagada ? 'pagar' : 'hacer un pedido'} en PitBox por "${productoSeleccionado.nombre}". Mi nombre es ${formOrden.nombre}.${ordenId ? ` Orden #${ordenId.slice(0, 8).toUpperCase()}.` : ''}`
+                  )}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 24px', background: '#25d366', border: 'none', borderRadius: 12, color: 'white', fontWeight: 700, fontSize: 15, textDecoration: 'none', marginBottom: 12 }}>
+                    💬 Contactar al vendedor
+                  </a>
+                )}
+                <br />
+                <button onClick={() => { setProductoSeleccionado(null); setOrdenExitosa(false); setOrdenPagada(false) }}
+                  style={{ padding: '10px 20px', background: 'none', border: '1px solid #333', borderRadius: 10, color: '#888', cursor: 'pointer', marginTop: 8 }}>
+                  Volver a la tienda
+                </button>
+              </div>
+            )}
+
+            {/* ── Estado: formulario de orden ── */}
+            {!procesandoPago && !ordenExitosa && (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                   <h3 style={{ margin: 0, fontWeight: 800 }}>Confirmar pedido</h3>
                   <button onClick={() => setProductoSeleccionado(null)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer' }}><X size={20} /></button>
                 </div>
+
+                {/* Resumen del producto */}
                 <div style={{ background: '#1a1a1a', borderRadius: 12, padding: 14, marginBottom: 20 }}>
                   <p style={{ margin: '0 0 4px', fontWeight: 700 }}>{productoSeleccionado.nombre}</p>
-                  <p style={{ margin: 0, color: '#ef4444', fontWeight: 800, fontSize: 18 }}>S/ {productoSeleccionado.precio_oferta || productoSeleccionado.precio}</p>
-                  <p style={{ margin: '4px 0 0', color: '#666', fontSize: 12 }}>🏪 {productoSeleccionado.repuesteros?.nombre_tienda} · {productoSeleccionado.repuesteros?.distrito}</p>
+                  <p style={{ margin: 0, color: '#ef4444', fontWeight: 800, fontSize: 18 }}>
+                    S/ {productoSeleccionado.precio_oferta || productoSeleccionado.precio}
+                  </p>
+                  <p style={{ margin: '4px 0 0', color: '#666', fontSize: 12 }}>
+                    🏪 {productoSeleccionado.repuesteros?.nombre_tienda} · {productoSeleccionado.repuesteros?.distrito}
+                  </p>
                 </div>
 
+                {/* Formulario */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {vehiculos.length > 0 && (
                     <div>
@@ -264,44 +455,69 @@ const Tienda = ({ user }) => {
                   </div>
                   <div>
                     <label style={{ color: '#888', fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 4, textTransform: 'uppercase' }}>Cantidad</label>
-                    <input type="number" min="1" max={productoSeleccionado.stock} value={formOrden.cantidad} onChange={e => setFormOrden({ ...formOrden, cantidad: e.target.value })} style={{ ...inp, width: 80 }} />
+                    <input type="number" min="1" max={productoSeleccionado.stock} value={formOrden.cantidad}
+                      onChange={e => setFormOrden({ ...formOrden, cantidad: e.target.value })} style={{ ...inp, width: 80 }} />
                   </div>
                 </div>
 
-                <div style={{ background: '#1a1a1a', borderRadius: 10, padding: 12, margin: '16px 0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#888' }}>Total</span>
-                    <span style={{ fontWeight: 900, color: '#ef4444', fontSize: 18 }}>
-                      S/ {((productoSeleccionado.precio_oferta || productoSeleccionado.precio) * (parseInt(formOrden.cantidad) || 1)).toFixed(2)}
+                {/* Resumen de precios con comisión */}
+                <div style={{ background: '#1a1a1a', borderRadius: 10, padding: 14, margin: '16px 0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ color: '#888', fontSize: 13 }}>Subtotal ({formOrden.cantidad} × S/ {productoSeleccionado.precio_oferta || productoSeleccionado.precio})</span>
+                    <span style={{ color: 'white', fontSize: 13 }}>S/ {subtotal.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <span style={{ color: '#888', fontSize: 13 }}>
+                      Servicio PitBox (5%)
+                      <span style={{ color: '#555', fontSize: 11 }}> · pago seguro</span>
                     </span>
+                    <span style={{ color: '#888', fontSize: 13 }}>S/ {comision.toFixed(2)}</span>
+                  </div>
+                  <div style={{ borderTop: '1px solid #333', paddingTop: 10, display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: 700 }}>Total a pagar</span>
+                    <span style={{ fontWeight: 900, color: '#ef4444', fontSize: 20 }}>S/ {total.toFixed(2)}</span>
                   </div>
                 </div>
 
-                <button onClick={crearOrden} disabled={ordenando || !formOrden.nombre || !formOrden.telefono}
-                  style={{ width: '100%', padding: 14, background: 'linear-gradient(135deg, #ef4444, #f97316)', border: 'none', borderRadius: 12, color: 'white', fontWeight: 800, fontSize: 16, cursor: 'pointer', opacity: (!formOrden.nombre || !formOrden.telefono) ? 0.5 : 1 }}>
-                  {ordenando ? 'Procesando...' : 'Confirmar pedido'}
-                </button>
-              </>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                <div style={{ width: 64, height: 64, background: '#22c55e20', border: '2px solid #22c55e', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                  <Check size={32} style={{ color: '#22c55e' }} />
+                {/* Botones de acción */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {/* Pagar con tarjeta — botón principal */}
+                  <button
+                    onClick={iniciarPagoCulqi}
+                    disabled={!formOrden.nombre || !formOrden.telefono}
+                    style={{
+                      width: '100%', padding: '14px', borderRadius: 12, border: 'none',
+                      background: (!formOrden.nombre || !formOrden.telefono)
+                        ? '#1a1a1a'
+                        : 'linear-gradient(135deg, #1d4ed8, #7c3aed)',
+                      color: 'white', fontWeight: 800, fontSize: 16, cursor: 'pointer',
+                      opacity: (!formOrden.nombre || !formOrden.telefono) ? 0.5 : 1,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+                    }}>
+                    <CreditCard size={18} />
+                    Pagar S/ {total.toFixed(2)} con tarjeta
+                    <Lock size={13} style={{ color: 'rgba(255,255,255,0.6)' }} />
+                  </button>
+
+                  {/* Reservar sin pago — opción secundaria */}
+                  <button
+                    onClick={crearOrdenSinPago}
+                    disabled={ordenando || !formOrden.nombre || !formOrden.telefono}
+                    style={{
+                      width: '100%', padding: '11px', background: 'transparent',
+                      border: '1px solid #444', borderRadius: 12,
+                      color: '#aaa', fontWeight: 600, fontSize: 13,
+                      cursor: 'pointer',
+                      opacity: (!formOrden.nombre || !formOrden.telefono) ? 0.4 : 1
+                    }}>
+                    {ordenando ? 'Enviando...' : 'Reservar sin pago (pago contra entrega)'}
+                  </button>
                 </div>
-                <h3 style={{ margin: '0 0 8px', fontSize: 20 }}>¡Pedido enviado! 🎉</h3>
-                <p style={{ color: '#666', margin: '0 0 20px' }}>El repuestero revisará tu pedido y te contactará por WhatsApp.</p>
-                {productoSeleccionado.repuesteros?.whatsapp && (
-                  <a href={`https://wa.me/${productoSeleccionado.repuesteros.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(`Hola, acabo de hacer un pedido en PitBox por "${productoSeleccionado.nombre}". Mi nombre es ${formOrden.nombre}.`)}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 24px', background: '#25d366', border: 'none', borderRadius: 12, color: 'white', fontWeight: 700, fontSize: 15, textDecoration: 'none', marginBottom: 12 }}>
-                    💬 Contactar por WhatsApp
-                  </a>
-                )}
-                <br />
-                <button onClick={() => { setProductoSeleccionado(null); setOrdenExitosa(false) }}
-                  style={{ padding: '10px 20px', background: 'none', border: '1px solid #333', borderRadius: 10, color: '#888', cursor: 'pointer', marginTop: 8 }}>
-                  Volver a la tienda
-                </button>
-              </div>
+
+                <p style={{ textAlign: 'center', color: '#444', fontSize: 11, marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                  <Lock size={10} /> Pago seguro con encriptación SSL
+                </p>
+              </>
             )}
           </div>
         </div>
