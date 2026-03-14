@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../services/supabase'
-import { Search, MapPin, Phone, ShoppingCart, X, Filter, Flame, ExternalLink, Check } from 'lucide-react'
+import { Search, MapPin, ShoppingCart, X, Flame, ExternalLink, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const CATEGORIAS = ['todos', 'cables', 'frenos', 'aceite', 'llantas', 'filtros', 'baterías', 'suspensión', 'otros']
 
@@ -131,67 +131,79 @@ const Tienda = ({ user }) => {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {productosFiltrados.map(p => (
-            <div key={p.id} style={{ background: '#111', border: `1px solid ${p.es_remate ? '#f97316' : '#222'}`, borderRadius: 14, padding: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <p style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>{p.nombre}</p>
+          {productosFiltrados.map(p => {
+            const fotos = p.fotos || (p.imagen_url ? [p.imagen_url] : [])
+            return (
+              <div key={p.id} style={{ background: '#111', border: `1px solid ${p.es_remate ? '#f97316' : '#222'}`, borderRadius: 14, overflow: 'hidden' }}>
+
+                {/* Fotos */}
+                {fotos.length > 0 && (
+                  <div style={{ position: 'relative', height: 180, background: '#1a1a1a' }}>
+                    <img src={fotos[0]} alt={p.nombre} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    {fotos.length > 1 && (
+                      <div style={{ position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.7)', borderRadius: 99, padding: '2px 8px', fontSize: 11, color: 'white' }}>
+                        1 / {fotos.length}
+                      </div>
+                    )}
                     {p.es_remate && (
-                      <span style={{ background: '#f9731625', border: '1px solid #f97316', color: '#f97316', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 99, display: 'flex', alignItems: 'center', gap: 3 }}>
-                        <Flame size={10} /> REMATE
-                      </span>
+                      <div style={{ position: 'absolute', top: 10, left: 10, background: '#f97316', borderRadius: 99, padding: '3px 10px', fontSize: 11, fontWeight: 800, color: 'white', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Flame size={11} /> REMATE
+                      </div>
                     )}
                   </div>
-                  {p.marca && <p style={{ margin: '0 0 2px', color: '#ef4444', fontSize: 12, fontWeight: 600 }}>Marca: {p.marca}</p>}
-                  {p.compatible_marcas && <p style={{ margin: '0 0 2px', color: '#666', fontSize: 12 }}>Compatible: {p.compatible_marcas}</p>}
-                  {p.descripcion && <p style={{ margin: '0 0 6px', color: '#555', fontSize: 12 }}>{p.descripcion}</p>}
-                  <p style={{ margin: 0, color: '#888', fontSize: 11 }}>Stock: {p.stock} unidades</p>
-                </div>
-                <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
-                  {p.precio_oferta ? (
-                    <>
-                      <p style={{ margin: 0, color: '#555', fontSize: 11, textDecoration: 'line-through' }}>S/ {p.precio}</p>
-                      <p style={{ margin: 0, color: '#22c55e', fontWeight: 900, fontSize: 20 }}>S/ {p.precio_oferta}</p>
-                    </>
-                  ) : (
-                    <p style={{ margin: 0, color: '#ef4444', fontWeight: 900, fontSize: 20 }}>S/ {p.precio}</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Tienda info */}
-              {p.repuesteros && (
-                <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
-                  <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 13 }}>🏪 {p.repuesteros.nombre_tienda}</p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-                    <MapPin size={12} style={{ color: '#666' }} />
-                    <p style={{ margin: 0, color: '#666', fontSize: 12 }}>{p.repuesteros.direccion}, {p.repuesteros.distrito}</p>
-                  </div>
-                  <a href={`https://www.google.com/maps/search/${encodeURIComponent((p.repuesteros.direccion || '') + ' ' + (p.repuesteros.distrito || '') + ' Lima Peru')}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#2563eb', fontSize: 12, textDecoration: 'none' }}>
-                    <ExternalLink size={11} /> Ver en Google Maps
-                  </a>
-                </div>
-              )}
-
-              {/* Botones */}
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => { setProductoSeleccionado(p); setOrdenExitosa(false) }}
-                  style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg, #ef4444, #f97316)', border: 'none', borderRadius: 10, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                  <ShoppingCart size={14} /> Comprar
-                </button>
-                {p.repuesteros?.whatsapp && (
-                  <a href={`https://wa.me/${p.repuesteros.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(`Hola, vi en PitBox el producto "${p.nombre}" a S/ ${p.precio_oferta || p.precio}. ¿Está disponible?`)}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ padding: '10px 14px', background: '#0f1f0f', border: '1px solid #25d366', borderRadius: 10, color: '#25d366', fontWeight: 700, cursor: 'pointer', fontSize: 13, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    💬 WhatsApp
-                  </a>
                 )}
+
+                <div style={{ padding: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <p style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>{p.nombre}</p>
+                        {p.es_remate && fotos.length === 0 && (
+                          <span style={{ background: '#f9731625', border: '1px solid #f97316', color: '#f97316', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 99 }}>🔥 REMATE</span>
+                        )}
+                      </div>
+                      {p.marca && <p style={{ margin: '0 0 2px', color: '#ef4444', fontSize: 12, fontWeight: 600 }}>Marca: {p.marca}</p>}
+                      {p.compatible_marcas && <p style={{ margin: '0 0 2px', color: '#666', fontSize: 12 }}>Compatible: {p.compatible_marcas}</p>}
+                      {p.descripcion && <p style={{ margin: '0 0 4px', color: '#555', fontSize: 12 }}>{p.descripcion}</p>}
+                      <p style={{ margin: 0, color: '#444', fontSize: 11 }}>Stock: {p.stock} uds.</p>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
+                      {p.precio_oferta ? (
+                        <>
+                          <p style={{ margin: 0, color: '#555', fontSize: 11, textDecoration: 'line-through' }}>S/ {p.precio}</p>
+                          <p style={{ margin: 0, color: '#22c55e', fontWeight: 900, fontSize: 22 }}>S/ {p.precio_oferta}</p>
+                        </>
+                      ) : (
+                        <p style={{ margin: 0, color: '#ef4444', fontWeight: 900, fontSize: 22 }}>S/ {p.precio}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Tienda */}
+                  {p.repuesteros && (
+                    <div style={{ background: '#1a1a1a', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                      <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: 13 }}>🏪 {p.repuesteros.nombre_tienda}</p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                        <MapPin size={12} style={{ color: '#555' }} />
+                        <p style={{ margin: 0, color: '#666', fontSize: 12 }}>{p.repuesteros.direccion}, {p.repuesteros.distrito}</p>
+                      </div>
+                      <a href={`https://www.google.com/maps/search/${encodeURIComponent((p.repuesteros.direccion || '') + ' ' + (p.repuesteros.distrito || '') + ' Lima Peru')}`}
+                        target="_blank" rel="noreferrer"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#2563eb', fontSize: 12, textDecoration: 'none' }}>
+                        <ExternalLink size={11} /> Ver en Google Maps
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Solo botón comprar — WhatsApp aparece DESPUÉS de la orden */}
+                  <button onClick={() => { setProductoSeleccionado(p); setOrdenExitosa(false) }}
+                    style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #ef4444, #f97316)', border: 'none', borderRadius: 10, color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <ShoppingCart size={15} /> Hacer pedido
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

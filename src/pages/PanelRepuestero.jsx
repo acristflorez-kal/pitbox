@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../services/supabase'
-import { Store, Plus, Package, ShoppingBag, X, Save, Tag, MapPin, AlertCircle } from 'lucide-react'
+import { Store, Plus, Package, ShoppingBag, X, Save, Camera, Trash2 } from 'lucide-react'
 
 const CATEGORIAS = ['cables', 'frenos', 'aceite', 'llantas', 'filtros', 'baterías', 'suspensión', 'otros']
+const MAX_FOTOS = 3
 
 const PanelRepuestero = ({ user }) => {
   const [repuestero, setRepuestero] = useState(null)
@@ -13,6 +14,9 @@ const PanelRepuestero = ({ user }) => {
   const [showFormTienda, setShowFormTienda] = useState(false)
   const [showFormProducto, setShowFormProducto] = useState(false)
   const [guardando, setGuardando] = useState(false)
+  const [fotosPreview, setFotosPreview] = useState([])
+  const [fotosArchivos, setFotosArchivos] = useState([])
+  const fileInputRef = useRef(null)
 
   const [formTienda, setFormTienda] = useState({
     nombre_tienda: '', descripcion: '', direccion: '', distrito: '', ciudad: 'Lima', telefono: '', whatsapp: ''
@@ -49,17 +53,57 @@ const PanelRepuestero = ({ user }) => {
     setGuardando(false)
   }
 
+  const agregarFoto = (e) => {
+    const archivos = Array.from(e.target.files)
+    if (fotosArchivos.length + archivos.length > MAX_FOTOS) {
+      alert(`Máximo ${MAX_FOTOS} fotos por producto`)
+      return
+    }
+    const nuevasVistas = archivos.map(f => URL.createObjectURL(f))
+    setFotosPreview(prev => [...prev, ...nuevasVistas])
+    setFotosArchivos(prev => [...prev, ...archivos])
+  }
+
+  const quitarFoto = (i) => {
+    setFotosPreview(prev => prev.filter((_, idx) => idx !== i))
+    setFotosArchivos(prev => prev.filter((_, idx) => idx !== i))
+  }
+
+  const subirFotos = async (productoId) => {
+    const urls = []
+    for (const archivo of fotosArchivos) {
+      const ext = archivo.name.split('.').pop()
+      const path = `${productoId}/${Date.now()}.${ext}`
+      const { error } = await supabase.storage.from('product-images').upload(path, archivo, { upsert: true })
+      if (!error) {
+        const { data } = supabase.storage.from('product-images').getPublicUrl(path)
+        urls.push(data.publicUrl)
+      }
+    }
+    return urls
+  }
+
   const guardarProducto = async () => {
     if (!formProducto.nombre || !formProducto.precio) return
     setGuardando(true)
-    await supabase.from('productos').insert({
+    const { data } = await supabase.from('productos').insert({
       ...formProducto,
       repuestero_id: repuestero.id,
       precio: parseFloat(formProducto.precio),
       precio_oferta: formProducto.precio_oferta ? parseFloat(formProducto.precio_oferta) : null,
       stock: parseInt(formProducto.stock) || 1
-    })
+    }).select().single()
+
+    if (data && fotosArchivos.length > 0) {
+      const urls = await subirFotos(data.id)
+      if (urls.length > 0) {
+        await supabase.from('productos').update({ imagen_url: urls[0], fotos: urls }).eq('id', data.id)
+      }
+    }
+
     setFormProducto({ nombre: '', descripcion: '', categoria: 'cables', marca: '', precio: '', precio_oferta: '', stock: '1', es_remate: false, compatible_marcas: '', compatible_modelos: '' })
+    setFotosPreview([])
+    setFotosArchivos([])
     setShowFormProducto(false)
     await cargarDatos()
     setGuardando(false)
@@ -188,6 +232,30 @@ const PanelRepuestero = ({ user }) => {
                     <div style={{ gridColumn: 'span 2' }}><label style={lbl}>Compatible con marcas de vehículo</label><input value={formProducto.compatible_marcas} onChange={e => setFormProducto({ ...formProducto, compatible_marcas: e.target.value })} placeholder="Toyota, Nissan, Changan" style={inp} /></div>
                     <div style={{ gridColumn: 'span 2' }}><label style={lbl}>Compatible con modelos</label><input value={formProducto.compatible_modelos} onChange={e => setFormProducto({ ...formProducto, compatible_modelos: e.target.value })} placeholder="Hilux, Frontier, Gran Van" style={inp} /></div>
                     <div style={{ gridColumn: 'span 2' }}><label style={lbl}>Descripción</label><input value={formProducto.descripcion} onChange={e => setFormProducto({ ...formProducto, descripcion: e.target.value })} placeholder="Original, garantía 6 meses" style={inp} /></div>
+
+                    {/* FOTOS */}
+                    <div style={{ gridColumn: 'span 2' }}>
+                      <label style={lbl}>Fotos del producto (máx. {MAX_FOTOS})</label>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                        {fotosPreview.map((url, i) => (
+                          <div key={i} style={{ position: 'relative', width: 80, height: 80 }}>
+                            <img src={url} alt="" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 8, border: '1px solid #333' }} />
+                            <button onClick={() => quitarFoto(i)}
+                              style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, background: '#ef4444', border: 'none', borderRadius: '50%', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                        {fotosPreview.length < MAX_FOTOS && (
+                          <button onClick={() => fileInputRef.current?.click()}
+                            style={{ width: 80, height: 80, background: '#1a1a1a', border: '1px dashed #444', borderRadius: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, cursor: 'pointer', color: '#666' }}>
+                            <Camera size={20} />
+                            <span style={{ fontSize: 10 }}>Agregar</span>
+                          </button>
+                        )}
+                        <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={agregarFoto} style={{ display: 'none' }} />
+                      </div>
+                    </div>
                   </div>
                   <button onClick={guardarProducto} disabled={guardando}
                     style={{ width: '100%', marginTop: 14, padding: 12, background: 'linear-gradient(135deg, #ef4444, #f97316)', border: 'none', borderRadius: 10, color: 'white', fontWeight: 700, cursor: 'pointer' }}>
