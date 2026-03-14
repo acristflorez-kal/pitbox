@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useState, useEffect } from 'react'
 import { supabase } from './services/supabase'
 import Login from './pages/Login'
+import Landing from './pages/Landing'
 import Home from './pages/Home'
 import MiGarage from './pages/MiGarage'
 import Asistente from './pages/Asistente'
@@ -27,6 +28,7 @@ function App() {
       <div style={{ textAlign: 'center' }}>
         <div style={{ width: 48, height: 48, border: '4px solid #333', borderTop: '4px solid #ef4444', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto' }} />
         <p style={{ color: '#666', marginTop: 16 }}>Cargando PitBox...</p>
+        <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
       </div>
     </div>
   )
@@ -34,8 +36,13 @@ function App() {
   return (
     <Router>
       <Routes>
+        {/* Landing pública — solo para no autenticados */}
+        <Route path="/" element={!user ? <Landing /> : <Navigate to="/home" />} />
+
+        {/* Login / Registro */}
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/home" />} />
-        <Route path="/" element={<Navigate to="/home" />} />
+
+        {/* App autenticada */}
         {user ? (
           <Route path="/" element={<Layout user={user} />}>
             <Route path="home" element={<Home user={user} />} />
@@ -43,7 +50,7 @@ function App() {
             <Route path="asistente" element={<Asistente user={user} />} />
           </Route>
         ) : (
-          <Route path="*" element={<Navigate to="/login" />} />
+          <Route path="*" element={<Navigate to="/" />} />
         )}
       </Routes>
     </Router>

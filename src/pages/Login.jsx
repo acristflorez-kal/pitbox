@@ -1,12 +1,15 @@
 import { useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../services/supabase'
 
 const Login = () => {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [isRegister, setIsRegister] = useState(false)
+  const [isRegister, setIsRegister] = useState(location.state?.mode === 'register')
   const [nombre, setNombre] = useState('')
 
   const handleSubmit = async () => {
@@ -38,6 +41,14 @@ const Login = () => {
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div style={{ width: '100%', maxWidth: 400 }}>
+
+        {/* Volver */}
+        <div style={{ marginBottom: 16 }}>
+          <button onClick={() => navigate('/')}
+            style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, padding: 0 }}>
+            ← Volver
+          </button>
+        </div>
 
         {/* Logo */}
         <div style={{ textAlign: 'center', marginBottom: 40 }}>

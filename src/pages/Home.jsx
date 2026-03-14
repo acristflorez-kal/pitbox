@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../services/supabase'
-import { Car, Wrench, Bell, ChevronRight, Plus } from 'lucide-react'
+import { Car, Wrench, Bell, ChevronRight, Plus, Share2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 const Home = ({ user }) => {
@@ -110,6 +110,23 @@ const Home = ({ user }) => {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Compartir PitBox */}
+      <div style={{ marginBottom: 20 }}>
+        <button
+          onClick={() => {
+            const url = 'https://pitbox.app'
+            const texto = `🏎️ ¡Uso PitBox para el mantenimiento de mi auto y es increíble! Nunca más me olvido del cambio de aceite. Tiene asistente mecánico con IA y es gratis. Pruébalo: ${url}`
+            if (navigator.share) {
+              navigator.share({ title: 'PitBox', text: texto, url })
+            } else {
+              window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank')
+            }
+          }}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px', background: '#0f1f0f', border: '1px solid #25d366', borderRadius: 14, color: '#25d366', cursor: 'pointer', fontSize: 14, fontWeight: 700 }}>
+          <Share2 size={16} /> Comparte PitBox con amigos 🚀
+        </button>
       </div>
 
       {/* Acceso rápido al asistente */}
