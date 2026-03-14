@@ -1,6 +1,6 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../services/supabase'
-import { Home, Car, MessageCircle, LogOut } from 'lucide-react'
+import { Home, Car, MessageCircle, LogOut, ShoppingBag, Store } from 'lucide-react'
 
 const Layout = ({ user }) => {
   const location = useLocation()
@@ -15,8 +15,10 @@ const Layout = ({ user }) => {
 
   const menuItems = [
     { path: '/home', icon: Home, label: 'Inicio' },
-    { path: '/garage', icon: Car, label: 'Mi Garage' },
+    { path: '/tienda', icon: ShoppingBag, label: 'Tienda' },
     { path: '/asistente', icon: MessageCircle, label: 'Asistente' },
+    { path: '/garage', icon: Car, label: 'Garage' },
+    { path: '/repuestero', icon: Store, label: 'Vender' },
   ]
 
   return (

@@ -6,6 +6,8 @@ import Landing from './pages/Landing'
 import Home from './pages/Home'
 import MiGarage from './pages/MiGarage'
 import Asistente from './pages/Asistente'
+import Tienda from './pages/Tienda'
+import PanelRepuestero from './pages/PanelRepuestero'
 import Layout from './components/Layout'
 
 function App() {
@@ -48,6 +50,8 @@ function App() {
             <Route path="home" element={<Home user={user} />} />
             <Route path="garage" element={<MiGarage user={user} />} />
             <Route path="asistente" element={<Asistente user={user} />} />
+            <Route path="tienda" element={<Tienda user={user} />} />
+            <Route path="repuestero" element={<PanelRepuestero user={user} />} />
           </Route>
         ) : (
           <Route path="*" element={<Navigate to="/" />} />
